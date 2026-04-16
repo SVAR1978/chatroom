@@ -2,13 +2,19 @@
   "name": "chatroom",
   "version": "1.0.0",
   "description": "",
-  "main": "dist/index.js",
+  "main": "backend/dist/index.js",
   "scripts": {
-    "build": "tsc",
-    "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "start:server": "node dist/index.js",
-    "start:client": "node dist/client.js"
+    "build": "tsc -p backend/tsconfig.json",
+    "build:client": "vite build --config frontend/vite.config.mjs",
+    "dev:server": "tsx watch backend/src/index.ts",
+    "dev:client": "vite --config frontend/vite.config.mjs",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "prisma:generate": "prisma generate --schema backend/prisma/schema.prisma",
+    "prisma:migrate": "prisma migrate dev --schema backend/prisma/schema.prisma",
+    "preview:client": "vite preview --config frontend/vite.config.mjs",
+    "start": "npm run build && npm run build:client && npm run start:server",
+    "start:server": "node backend/dist/index.js",
+    "start:client": "node backend/dist/client.js"
   },
   "keywords": [],
   "author": "",
@@ -19,13 +25,19 @@
     "@prisma/client": "^7.7.0",
     "dotenv": "^17.4.1",
     "pg": "^8.20.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.0",
     "@types/node": "^24.5.2",
     "@types/pg": "^8.20.0",
     "@types/ws": "^8.18.1",
+    "concurrently": "^9.2.1",
     "prisma": "^7.7.0",
+    "tsx": "^4.20.6",
+    "vite": "^7.1.11",
     "typescript": "^5.9.2"
   }
 }

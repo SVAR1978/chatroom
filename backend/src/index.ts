@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { WebSocket, WebSocketServer } from "ws";
@@ -13,9 +13,21 @@ const LISTEN_HOST = HOST === "0.0.0.0" ? "0.0.0.0" : HOST;
 const PUBLIC_HOST = process.env.PUBLIC_HOST ?? "localhost";
 const HTTP_PROTOCOL = process.env.HTTP_PROTOCOL ?? "http";
 const WS_PROTOCOL = process.env.WS_PROTOCOL ?? "ws";
-const STATIC_ROOT = path.resolve(process.cwd(), "public");
+const FRONTEND_DIST_ROOT = path.resolve(process.cwd(), "frontend", "dist");
 const WEB_URL = `${HTTP_PROTOCOL}://${PUBLIC_HOST}:${PORT}`;
 const SERVER_URL = `${WS_PROTOCOL}://${PUBLIC_HOST}:${PORT}`;
+const MIME_TYPES: Record<string, string> = {
+	".css": "text/css; charset=utf-8",
+	".js": "application/javascript; charset=utf-8",
+	".html": "text/html; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".ico": "image/x-icon",
+};
 
 const connectionString = process.env.DATABASE_URL;
 const pool = new Pool({ connectionString });
@@ -41,17 +53,55 @@ const server = createServer((req, res) => {
 const wss = new WebSocketServer({ server });
 const clients = new Map<WebSocket, ClientData>();
 
+async function fileExists(filePath: string): Promise<boolean> {
+	try {
+		const info = await stat(filePath);
+		return info.isFile();
+	} catch {
+		return false;
+	}
+}
+
+function getSafePath(root: string, route: string): string | null {
+	const cleaned = route.replace(/^\/+/, "");
+	const resolved = path.resolve(root, cleaned);
+	if (!resolved.startsWith(root)) {
+		return null;
+	}
+	return resolved;
+}
+
+async function serveStaticFile(filePath: string, res: ServerResponse): Promise<boolean> {
+	if (!(await fileExists(filePath))) {
+		return false;
+	}
+
+	const ext = path.extname(filePath).toLowerCase();
+	const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+	const body = await readFile(filePath);
+	res.writeHead(200, { "Content-Type": contentType });
+	res.end(body);
+	return true;
+}
+
 async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
 	const route = req.url?.split("?")[0] ?? "/";
 
+	if (route === "/health") {
+		res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+		res.end(JSON.stringify({ status: "ok" }));
+		return;
+	}
+
 	if (route === "/" || route === "/index.html") {
 		try {
-			const html = await readFile(path.join(STATIC_ROOT, "index.html"), "utf8");
-			res.writeHead(200, {
-				"Content-Type": "text/html; charset=utf-8",
-				"Cache-Control": "no-store",
-			});
-			res.end(html);
+			const frontendIndex = path.join(FRONTEND_DIST_ROOT, "index.html");
+			if (await serveStaticFile(frontendIndex, res)) {
+				return;
+			}
+
+			res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+			res.end("No frontend found. Run npm run build:client.");
 			return;
 		} catch (error) {
 			console.error("Failed to serve HTML page:", error);
@@ -61,9 +111,8 @@ async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Pro
 		}
 	}
 
-	if (route === "/health") {
-		res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-		res.end(JSON.stringify({ status: "ok" }));
+	const frontendFile = getSafePath(FRONTEND_DIST_ROOT, route);
+	if (frontendFile && (await serveStaticFile(frontendFile, res))) {
 		return;
 	}
 
@@ -101,11 +150,49 @@ function getGeminiPrompt(content: string): string | null {
 		return trimmed.replace(/^@gemini\b\s*/i, "").trim() || null;
 	}
 
+	if (/^@ai\b/i.test(trimmed)) {
+		return trimmed.replace(/^@ai\b\s*/i, "").trim() || null;
+	}
+
 	if (/^\/gemini\b/i.test(trimmed)) {
 		return trimmed.replace(/^\/gemini\b\s*/i, "").trim() || null;
 	}
 
+	if (/^\/ai\b/i.test(trimmed)) {
+		return trimmed.replace(/^\/ai\b\s*/i, "").trim() || null;
+	}
+
+	if (/^\/ask\b/i.test(trimmed)) {
+		return trimmed.replace(/^\/ask\b\s*/i, "").trim() || null;
+	}
+
 	return null;
+}
+
+function findSocketByName(targetName: string): WebSocket | null {
+	const normalized = targetName.trim().toLowerCase();
+	if (!normalized) {
+		return null;
+	}
+
+	for (const [socket, data] of clients.entries()) {
+		if (socket.readyState !== WebSocket.OPEN) {
+			continue;
+		}
+		if (data.name.toLowerCase() === normalized) {
+			return socket;
+		}
+	}
+
+	return null;
+}
+
+function sendCommandHelp(socket: WebSocket): void {
+	socket.send("Commands:");
+	socket.send("/name yourName -> rename yourself");
+	socket.send("/who -> list online users");
+	socket.send("/dm user message -> private local message");
+	socket.send("@gemini, /gemini, @ai, /ai, /ask -> ask AI");
 }
 
 async function getGeminiReply(prompt: string, username: string): Promise<string> {
@@ -178,7 +265,8 @@ wss.on("connection", (socket) => {
 
 	socket.send(`Connected to chat room as ${generatedName}`);
 	socket.send("Use command /name yourName to rename yourself.");
-	socket.send("Talk to Gemini with @gemini your message or /gemini your message.");
+	socket.send("Talk to AI with @gemini, /gemini, @ai, /ai, or /ask.");
+	socket.send("Use /help to see all commands.");
 	broadcast(`${generatedName} joined the room.`, socket);
 
 	socket.on("message", (raw) => {
@@ -201,12 +289,51 @@ wss.on("connection", (socket) => {
 			return;
 		}
 
+		if (text === "/help") {
+			sendCommandHelp(socket);
+			return;
+		}
+
+		if (text === "/who") {
+			const onlineUsers = Array.from(clients.values())
+				.map((data) => data.name)
+				.sort((a, b) => a.localeCompare(b));
+			socket.send(`Online users (${onlineUsers.length}): ${onlineUsers.join(", ")}`);
+			return;
+		}
+
+		if (text.startsWith("/dm ")) {
+			const dmPayload = text.slice(4).trim();
+			const [targetName, ...rest] = dmPayload.split(/\s+/);
+			const dmMessage = rest.join(" ").trim();
+
+			if (!targetName || !dmMessage) {
+				socket.send("Usage: /dm userName your message");
+				return;
+			}
+
+			const targetSocket = findSocketByName(targetName);
+			if (!targetSocket) {
+				socket.send(`User '${targetName}' is not online.`);
+				return;
+			}
+
+			if (targetSocket === socket) {
+				socket.send("You cannot DM yourself.");
+				return;
+			}
+
+			targetSocket.send(`[DM from ${current.name}] ${dmMessage}`);
+			socket.send(`[DM to ${targetName}] ${dmMessage}`);
+			return;
+		}
+
 		const content = extractChatText(text);
 
 		void saveMessage(current.name, content).catch((error: unknown) => {
 			console.error("Failed to store message:", error);
 		});
-		broadcast(`${current.name}: ${content}`, socket);
+		broadcast(`${current.name}: ${content}`);
 
 		const geminiPrompt = getGeminiPrompt(content);
 		if (!geminiPrompt) {

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>imdio Audio Compressor</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --ink: #1d1f25;
+      --card: #fffaf1;
+      --line: #e8dbbf;
+      --accent: #c84b31;
+      --accent-2: #2d6a4f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Sora", "Avenir Next", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 18% 16%, rgba(200, 75, 49, 0.22), transparent 34%),
+        radial-gradient(circle at 82% 14%, rgba(45, 106, 79, 0.2), transparent 34%),
+        var(--bg);
+    }
+
+    main {
+      width: min(900px, 94vw);
+      margin: 24px auto;
+      display: grid;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+    }
+
+    h1 { margin: 0; }
+    p { margin: 8px 0 0; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    label { display: grid; gap: 6px; font-size: 14px; }
+
+    input, select, button {
+      font: inherit;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    button {
+      cursor: pointer;
+      background: linear-gradient(130deg, var(--accent), #ee6c4d);
+      border: 0;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    progress {
+      width: 100%;
+      height: 16px;
+    }
+
+    #result {
+      margin: 0;
+      background: #132236;
+      color: #f9fafb;
+      border-radius: 10px;
+      padding: 12px;
+      min-height: 120px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    #downloadLink {
+      display: inline-block;
+      margin-top: 10px;
+      color: #1f4f91;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card">
+      <h1>imdio Audio Compressor</h1>
+      <p>Upload one audio file, compress it, and download the reduced MP3.</p>
+    </section>
+
+    <section class="card">
+      <div class="grid">
+        <label>
+          Compression Profile
+          <select id="profile">
+            <option value="voice">Voice (64 kbps)</option>
+            <option value="balanced" selected>Balanced (96 kbps)</option>
+            <option value="high">High Quality (192 kbps)</option>
+          </select>
+        </label>
+        <label>
+          Custom Bitrate (kbps)
+          <input id="customBitrate" type="number" min="32" max="320" placeholder="Optional, e.g. 128" />
+        </label>
+        <label style="grid-column: 1 / -1;">
+          Audio File
+          <input id="audioFile" type="file" accept=".mp3,.wav,.ogg,.webm,.aac,.flac,audio/*" />
+        </label>
+      </div>
+
+      <div class="row" style="margin-top: 12px;">
+        <button id="compressBtn">Compress Audio</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <strong>Upload Progress</strong>
+      <progress id="progress" value="0" max="100"></progress>
+      <div id="stats" class="row">
+        <span>0%</span>
+        <span>0 KB/s</span>
+        <span>ETA --</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <strong>Compression Result</strong>
+      <pre id="result"></pre>
+      <a id="downloadLink" href="#" hidden>Download Compressed Audio</a>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

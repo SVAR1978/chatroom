@@ -80,11 +80,6 @@
       </section>
 
       <section class="card">
-        <h2>Comparison Metrics</h2>
-        <pre>{{ result.metrics | tojson(indent=2) }}</pre>
-      </section>
-
-      <section class="card">
         <h2>Compressed Image Match Score (vs Original Image)</h2>
         <pre>{{ result.compression_match_with_original | tojson(indent=2) }}</pre>
       </section>
@@ -149,8 +144,6 @@
           </figure>
         </div>
 
-        <h3>Scan and Compression Summary</h3>
-        <pre>{{ result.scan | tojson(indent=2) }}</pre>
       </section>
     {% endif %}
   </main>

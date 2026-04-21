@@ -193,6 +193,70 @@ function sendCommandHelp(socket: WebSocket): void {
 	socket.send("/who -> list online users");
 	socket.send("/dm user message -> private local message");
 	socket.send("@gemini, /gemini, @ai, /ai, /ask -> ask AI");
+	socket.send("/image analyze -> upload and analyze image with Gemini");
+}
+
+async function analyzeImageWithGemini(base64Image: string, mimeType: string, username: string): Promise<string> {
+	if (!GEMINI_API_KEY) {
+		return "Gemini is not configured yet. Set GEMINI_API_KEY in your .env file.";
+	}
+
+	try {
+		const response = await fetch(
+			`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					contents: [
+						{
+							role: "user",
+							parts: [
+								{
+									text: "Analyze this image and provide: 1) Main objects/subjects identified, 2) People or characters (if any), 3) Text visible in image, 4) Colors and mood, 5) Overall identity/category (e.g., landscape, portrait, product, etc.). Be concise but thorough.",
+								},
+								{
+									inline_data: {
+										mime_type: mimeType,
+										data: base64Image,
+									},
+								},
+							],
+						},
+					],
+				}),
+			}
+		);
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+		}
+
+		const json = (await response.json()) as {
+			candidates?: Array<{
+				content?: {
+					parts?: Array<{ text?: string }>;
+				};
+			}>;
+		};
+
+		const reply = json.candidates?.[0]?.content?.parts
+			?.map((part) => part.text ?? "")
+			.join("")
+			.trim();
+
+		if (!reply) {
+			return "I could not analyze this image.";
+		}
+
+		return reply;
+	} catch (error: unknown) {
+		console.error("Image analysis failed:", error);
+		return `Image analysis failed: ${error instanceof Error ? error.message : "Unknown error"}`;
+	}
 }
 
 async function getGeminiReply(prompt: string, username: string): Promise<string> {
@@ -273,6 +337,34 @@ wss.on("connection", (socket) => {
 		const text = raw.toString().trim();
 		const current = clients.get(socket);
 		if (!current || !text) {
+			return;
+		}
+
+		// Handle image analysis
+		if (text.startsWith("IMAGE:")) {
+			const imageData = text.slice(6);
+			const matches = imageData.match(/^data:([^;]+);base64,(.+)$/);
+			if (!matches || matches.length < 3) {
+				socket.send("Invalid image data format.");
+				return;
+			}
+
+			const mimeType = matches[1];
+			const base64Data = matches[2];
+
+			socket.send(`${current.name}: Analyzing image...`);
+			broadcast(`${current.name}: Analyzing image...`, socket);
+
+			void analyzeImageWithGemini(base64Data, mimeType, current.name)
+				.then(async (analysis) => {
+					const analysisMessage = `[IMAGE ANALYSIS] ${analysis}`;
+					broadcast(`${current.name}: ${analysisMessage}`);
+					await saveMessage(current.name, analysisMessage);
+				})
+				.catch((error: unknown) => {
+					console.error("Image analysis failed:", error);
+					socket.send("Error analyzing image. Please try again.");
+				});
 			return;
 		}
 

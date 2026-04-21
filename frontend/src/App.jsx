@@ -29,6 +29,7 @@ export default function App() {
   const [status, setStatus] = useState("connecting");
   const socketRef = useRef(null);
   const viewportRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const socketUrl = useMemo(() => getSocketUrl(), []);
 
@@ -101,6 +102,34 @@ export default function App() {
     socket.send(`/name ${trimmed}`);
   }
 
+  function handleImageSelect(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        alert("Not connected to server");
+        return;
+      }
+
+      const base64String = reader.result;
+      socket.send(`IMAGE:${base64String}`);
+    };
+    reader.onerror = () => {
+      alert("Failed to read image file");
+    };
+    reader.readAsDataURL(file);
+
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
+
   const connectionLabel =
     status === "connected" ? "Connected" : status === "connecting" ? "Connecting" : "Offline";
 
@@ -159,12 +188,21 @@ export default function App() {
             <button type="button" className="ghost" onClick={() => setInput("/name ")}>Rename</button>
             <button type="button" className="ghost" onClick={() => setInput("/who")}>Who is online</button>
             <button type="button" className="ghost" onClick={() => setInput("/help")}>Show help</button>
+            <button type="button" className="ghost image-action" onClick={() => fileInputRef.current?.click()}>Analyze Image</button>
           </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImageSelect}
+            style={{ display: "none" }}
+          />
         </aside>
 
         <section className="panel chat">
           <div className="chat-head">
             <h2>Live Conversation</h2>
+            <p>Synced over WebSocket</p>
           </div>
 
           <div ref={viewportRef} className="messages" aria-live="polite">

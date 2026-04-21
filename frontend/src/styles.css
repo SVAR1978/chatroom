@@ -120,6 +120,8 @@ body {
   align-content: start;
   gap: 12px;
   background: var(--surface-1);
+  overflow-y: auto;
+  max-height: 74vh;
 }
 
 .side h2 {
@@ -199,9 +201,10 @@ textarea.field {
 }
 
 .quick-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr;
   gap: 8px;
-  margin-top: 2px;
+  margin-top: 8px;
 }
 
 .ghost {
@@ -217,6 +220,26 @@ textarea.field {
 .ghost:hover {
   color: var(--text);
   border-color: rgba(52, 220, 183, 0.45);
+}
+
+.image-action {
+  background: linear-gradient(135deg, rgba(52, 220, 183, 0.22), rgba(255, 184, 109, 0.15));
+  border: 1.5px solid rgba(52, 220, 183, 0.35);
+  color: #34dcb7;
+  font-weight: 600;
+  position: relative;
+  overflow: hidden;
+}
+
+.image-action:hover {
+  color: #fff;
+  border-color: rgba(52, 220, 183, 0.6);
+  background: linear-gradient(135deg, rgba(52, 220, 183, 0.32), rgba(255, 184, 109, 0.22));
+  box-shadow: 0 0 16px rgba(52, 220, 183, 0.2);
+}
+
+.image-action:active {
+  transform: scale(0.96);
 }
 
 .chat {

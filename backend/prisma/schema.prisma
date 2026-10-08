@@ -6,9 +6,109 @@ datasource db {
   provider = "postgresql"
 }
 
-model Message {
-  id        Int      @id @default(autoincrement())
-  sender    String
-  content   String
+model User {
+  id           String       @id @default(uuid())
+  username     String       @unique
+  passwordHash String
+  displayName  String
+  createdAt    DateTime     @default(now())
+  aiUsageCount Int          @default(0)
+  aiUsageReset DateTime     @default(now())
+  messages     Message[]
+  sessions     Session[]
+  roomMembers  RoomMember[]
+  invites      RoomInvite[]
+  blocks       Block[]      @relation("Blocker")
+  blockedBy    Block[]      @relation("Blocked")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+}
+
+model Room {
+  id        String       @id @default(uuid())
+  name      String
+  isDirect  Boolean      @default(false)
+  isPrivate Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  members   RoomMember[]
+  messages  Message[]
+  invites   RoomInvite[]
+  attachments Attachment[]
+}
+
+model RoomMember {
+  id          String   @id @default(uuid())
+  roomId      String
+  userId      String
+  role        String   @default("MEMBER") // OWNER, MODERATOR, MEMBER
+  joinedAt    DateTime @default(now())
+  lastReadAt  DateTime @default(now())
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([roomId, userId])
+}
+
+model RoomInvite {
+  id        String   @id @default(uuid()) // Invite code
+  roomId    String
+  creatorId String
+  expiresAt DateTime
   createdAt DateTime @default(now())
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  creator   User     @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+}
+
+model Block {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+  blocker   User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+}
+
+model Message {
+  id              Int      @id @default(autoincrement())
+  clientMessageId String?
+  roomId          String
+  room            Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  senderId        String?
+  sender          User?    @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  senderName      String
+  content         String
+  createdAt       DateTime @default(now())
+  
+  isDeleted       Boolean  @default(false)
+  editedAt        DateTime?
+  isAi            Boolean  @default(false)
+  
+  replyToId       Int?
+  replyTo         Message?  @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies         Message[] @relation("MessageReplies")
+  
+  attachmentId    String?
+  attachment      Attachment? @relation(fields: [attachmentId], references: [id])
+
+  @@unique([senderId, clientMessageId])
+}
+
+model Attachment {
+  id         String   @id @default(uuid())
+  roomId     String
+  room       Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  uploaderId String
+  fileName   String
+  mimeType   String
+  size       Int
+  path       String
+  createdAt  DateTime @default(now())
+  messages   Message[]
 }

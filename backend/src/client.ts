@@ -25,126 +25,222 @@ const PORT = process.env.PORT ?? 8080;
 const WS_PROTOCOL = process.env.WS_PROTOCOL ?? "ws";
 const DEFAULT_URL = `${WS_PROTOCOL}://${HOST}:${PORT}`;
 
-const URL = process.argv[2] ?? DEFAULT_URL;
+const WS_URL = process.argv[2] ?? DEFAULT_URL;
 let currentUsername = "You";
-
-const socket = new WebSocket(URL);
-
-function clearScreen() {
-  console.clear();
-}
-
-function printHeader() {
-  console.log(
-    `${colors.bgBlue}${colors.white}${colors.bright} 💬 CHATROOM ${colors.reset}`
-  );
-  console.log(
-    `${colors.dim}${colors.cyan}Connected to: ${URL}${colors.reset}`
-  );
-  console.log(
-    `${colors.dim}${colors.cyan}User: ${currentUsername}${colors.reset}`
-  );
-  console.log(`${colors.dim}${"─".repeat(60)}${colors.reset}\n`);
-}
-
-function printWelcome() {
-  printHeader();
-  console.log(
-    `${colors.green}${colors.bright}✓ Connected to chat server${colors.reset}\n`
-  );
-  console.log(`${colors.bright}Available Commands:${colors.reset}`);
-  console.log(`  ${colors.cyan}/name <name>${colors.reset}     - Change your display name`);
-  console.log(`  ${colors.cyan}@gemini <prompt>${colors.reset}  - Ask Gemini AI`);
-  console.log(`  ${colors.cyan}/quit${colors.reset}             - Exit chat\n`);
-  console.log(`${colors.bright}Type a message and press Enter to chat${colors.reset}`);
-  console.log(`${colors.dim}${"─".repeat(60)}${colors.reset}\n`);
-}
-
-function formatMessage(text: string) {
-  try {
-    const json = JSON.parse(text);
-    if (json.sender && json.content) {
-      const senderColor =
-        json.sender === currentUsername ? colors.yellow : colors.green;
-      const prefix =
-        json.sender === currentUsername
-          ? `${colors.yellow}► You${colors.reset}`
-          : `${colors.green}◄ ${json.sender}${colors.reset}`;
-
-      return `${prefix}: ${json.content}`;
-    }
-  } catch {
-    // Not JSON, treat as system message
-    return `${colors.cyan}${colors.dim}[System] ${text}${colors.reset}`;
-  }
-  return text;
-}
-
-socket.on("open", () => {
-  clearScreen();
-  printWelcome();
-});
-
-socket.on("message", (data) => {
-  const message = formatMessage(data.toString());
-  process.stdout.write(`\n${message}\n`);
-  rl.prompt();
-});
-
-socket.on("close", () => {
-  console.log(
-    `\n${colors.red}${colors.bright}✗ Disconnected from server${colors.reset}`
-  );
-  process.exit(0);
-});
-
-socket.on("error", (err) => {
-  console.error(
-    `${colors.red}${colors.bright}✗ Connection error: ${err.message}${colors.reset}`
-  );
-});
 
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
-  prompt: `${colors.bright}${colors.magenta}> ${colors.reset}`,
 });
 
-rl.prompt();
+let currentRoomId = "general";
+let globalToken = "";
 
-rl.on("line", (line) => {
-  const text = line.trim();
+function connectWebSocket(token: string) {
+  globalToken = token;
+  const wsUrl = new URL(WS_URL);
+  wsUrl.searchParams.set("token", token);
+  const socket = new WebSocket(wsUrl.toString());
 
-  if (text === "/quit") {
-    console.log(`${colors.cyan}Closing connection...${colors.reset}`);
-    rl.close();
-    socket.close();
-    return;
-  }
+  socket.on("open", () => {
+    console.clear();
+    console.log(`${colors.bright}${colors.cyan}=== Welcome to Chatroom CLI ===${colors.reset}\n`);
+  });
 
-  if (text.toLowerCase().startsWith("/name ")) {
-    const newName = text.slice(6).trim();
-    if (newName) {
-      currentUsername = newName;
-      clearScreen();
-      printHeader();
-      console.log(`${colors.green}✓ Username changed to: ${newName}${colors.reset}\n`);
-    } else {
-      console.log(`${colors.red}✗ Please provide a username${colors.reset}`);
+  socket.on("message", (data) => {
+    try {
+      const event = JSON.parse(data.toString());
+      let message = "";
+      if (event.type === "message.new") {
+        if (event.roomId !== currentRoomId) return; // ignore other rooms
+        const senderColor = event.sender === currentUsername ? colors.yellow : colors.green;
+        const prefix = event.sender === currentUsername
+          ? `${colors.yellow}► You${colors.reset}`
+          : `${colors.green}◄ ${event.sender}${colors.reset}`;
+        message = `${prefix}: ${event.content}`;
+      } else if (event.type === "system.notice") {
+        if (event.roomId && event.roomId !== currentRoomId) return;
+        message = `${colors.cyan}${colors.dim}[System] ${event.content}${colors.reset}`;
+      } else if (event.type === "auth.success") {
+        currentUsername = event.name;
+        message = `${colors.green}✓ Logged in as: ${event.name}${colors.reset}`;
+      } else if (event.type === "error") {
+        message = `${colors.red}✗ Error: ${event.message}${colors.reset}`;
+      } else if (event.type === "online.users") {
+        message = `${colors.cyan}Online (${event.users.length}): ${event.users.join(", ")}${colors.reset}`;
+      } else {
+        return; // Ignore other events like room.joined
+      }
+      
+      process.stdout.write(`\n${message}\n`);
+      rl.setPrompt(`${colors.bright}${colors.magenta}> ${colors.reset}`);
+      rl.prompt();
+    } catch (err) {
+      // legacy text fallback
     }
-    rl.prompt();
-    return;
-  }
+  });
 
-  if (!text) {
-    rl.prompt();
-    return;
-  }
+  socket.on("close", () => {
+    console.log(`\n${colors.red}${colors.bright}✗ Disconnected from server${colors.reset}`);
+    process.exit(0);
+  });
 
-  socket.send(text);
+  socket.on("error", (err) => {
+    console.error(`${colors.red}${colors.bright}✗ Connection error: ${err.message}${colors.reset}`);
+  });
+
+  rl.setPrompt(`${colors.bright}${colors.magenta}> ${colors.reset}`);
   rl.prompt();
-});
 
-rl.on("close", () => {
-  socket.close();
-});
+  rl.on("line", async (line) => {
+    const text = line.trim();
+
+    if (text === "/quit") {
+      console.log(`${colors.cyan}Closing connection...${colors.reset}`);
+      rl.close();
+      socket.close();
+      return;
+    }
+
+    if (text.toLowerCase().startsWith("/name ")) {
+      const newName = text.slice(6).trim();
+      if (newName) {
+        socket.send(JSON.stringify({ type: "auth.rename", name: newName }));
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (text.toLowerCase().startsWith("/who")) {
+      socket.send(JSON.stringify({ type: "command.execute", command: "who", args: [] }));
+      rl.prompt();
+      return;
+    }
+    
+    if (text.toLowerCase().startsWith("/dm ")) {
+      const args = text.slice(4).trim().split(" ");
+      const targetUsername = args[0];
+      const msg = args.slice(1).join(" ");
+      
+      const httpUrl = WS_URL.replace("ws://", "http://").replace("wss://", "https://") + `/api/dms`;
+      const res = await fetch(httpUrl, { 
+        method: "POST", 
+        headers: { "Authorization": `Bearer ${globalToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ targetUsername })
+      });
+      const data = await res.json() as any;
+      if (data.room) {
+        currentRoomId = data.room.id;
+        socket.send(JSON.stringify({ type: "room.join", roomId: currentRoomId }));
+        console.log(`${colors.green}Joined DM with ${targetUsername}${colors.reset}`);
+        if (msg) {
+          setTimeout(() => {
+            socket.send(JSON.stringify({ type: "message.send", roomId: currentRoomId, content: msg }));
+          }, 100);
+        }
+      } else {
+        console.log(`${colors.red}Error: ${data.error}${colors.reset}`);
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (text.toLowerCase().startsWith("/help")) {
+      socket.send(JSON.stringify({ type: "command.execute", command: "help", args: [] }));
+      rl.prompt();
+      return;
+    }
+
+    if (text.toLowerCase().startsWith("/invite")) {
+      const httpUrl = WS_URL.replace("ws://", "http://").replace("wss://", "https://") + `/api/rooms/${currentRoomId}/invites`;
+      const res = await fetch(httpUrl, { method: "POST", headers: { "Authorization": `Bearer ${globalToken}` } });
+      const data = await res.json() as any;
+      if (data.inviteId) {
+        console.log(`${colors.green}Invite code: ${data.inviteId}${colors.reset}`);
+      } else {
+        console.log(`${colors.red}Error: ${data.error}${colors.reset}`);
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (text.toLowerCase().startsWith("/join ")) {
+      const inviteCode = text.slice(6).trim();
+      const httpUrl = WS_URL.replace("ws://", "http://").replace("wss://", "https://") + `/api/invites/${inviteCode}/join`;
+      const res = await fetch(httpUrl, { method: "POST", headers: { "Authorization": `Bearer ${globalToken}` } });
+      const data = await res.json() as any;
+      if (data.room) {
+        currentRoomId = data.room.id;
+        socket.send(JSON.stringify({ type: "room.join", roomId: currentRoomId }));
+        console.log(`${colors.green}Joined room ${data.room.name}${colors.reset}`);
+      } else {
+        console.log(`${colors.red}Error: ${data.error}${colors.reset}`);
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (text.toLowerCase().startsWith("/create ")) {
+      const roomName = text.slice(8).trim();
+      const httpUrl = WS_URL.replace("ws://", "http://").replace("wss://", "https://") + `/api/rooms`;
+      const res = await fetch(httpUrl, { 
+        method: "POST", 
+        headers: { "Authorization": `Bearer ${globalToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: roomName, isPrivate: false })
+      });
+      const data = await res.json() as any;
+      if (data.room) {
+        currentRoomId = data.room.id;
+        socket.send(JSON.stringify({ type: "room.join", roomId: currentRoomId }));
+        console.log(`${colors.green}Created room ${data.room.name}${colors.reset}`);
+      } else {
+        console.log(`${colors.red}Error: ${data.error}${colors.reset}`);
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (!text) {
+      rl.prompt();
+      return;
+    }
+
+    socket.send(JSON.stringify({ type: "message.send", roomId: currentRoomId, content: text }));
+    rl.prompt();
+  });
+}
+
+async function authenticate() {
+  console.clear();
+  console.log(`${colors.bgBlue}${colors.white}${colors.bright} 💬 CHATROOM LOGIN ${colors.reset}\n`);
+  
+  rl.question("Username: ", (username) => {
+    rl.question("Password: ", async (password) => {
+      try {
+        const httpUrl = WS_URL.replace("ws://", "http://").replace("wss://", "https://") + "/api/login";
+        const res = await fetch(httpUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password })
+        });
+        const data = await res.json() as any;
+        
+        if (!res.ok) {
+          console.log(`${colors.red}Login failed: ${data.error}${colors.reset}`);
+          process.exit(1);
+        }
+        
+        console.log(`${colors.green}Login successful! Connecting...${colors.reset}`);
+        currentUsername = data.user.displayName;
+        connectWebSocket(data.token);
+      } catch (err) {
+        console.error("Failed to connect to server:", err);
+        process.exit(1);
+      }
+    });
+  });
+}
+
+authenticate();
+
+

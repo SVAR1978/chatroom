@@ -2,10 +2,19 @@ import "dotenv/config";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
-import { WebSocket, WebSocketServer } from "ws";
-import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
-import { Pool } from "pg";
+import { WebSocketServer, WebSocket } from "ws";
+
+import { prisma } from "./db";
+import { clients, broadcast } from "./state";
+import { handleAuth, broadcastOnlineUsers } from "./modules/auth";
+import { handleRoomJoin, handleRoomLeave } from "./modules/rooms";
+import { handleMessage, handleEditMessage, handleDeleteMessage } from "./modules/messages";
+import { handleCommand } from "./modules/commands";
+import { handleImageAttachment } from "./modules/attachments";
+import { ClientEvent } from "./types";
+import { handleAuthRoutes } from "./authAPI";
+import { logger } from "./logger";
+import { handleRoomRoutes } from "./roomAPI";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -17,456 +26,228 @@ const FRONTEND_DIST_ROOT = path.resolve(process.cwd(), "frontend", "dist");
 const WEB_URL = `${HTTP_PROTOCOL}://${PUBLIC_HOST}:${PORT}`;
 const SERVER_URL = `${WS_PROTOCOL}://${PUBLIC_HOST}:${PORT}`;
 const MIME_TYPES: Record<string, string> = {
-	".css": "text/css; charset=utf-8",
-	".js": "application/javascript; charset=utf-8",
-	".html": "text/html; charset=utf-8",
-	".json": "application/json; charset=utf-8",
-	".svg": "image/svg+xml",
-	".png": "image/png",
-	".jpg": "image/jpeg",
-	".jpeg": "image/jpeg",
-	".webp": "image/webp",
-	".ico": "image/x-icon",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
 };
 
-const connectionString = process.env.DATABASE_URL;
-const pool = new Pool({ connectionString });
-const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter } as any);
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
-const GEMINI_NAME = "gemini";
-
-type ClientData = {
-	name: string;
-};
-
-type ChatPayload = {
-	type: "chat";
-	text: string;
-};
-
-const server = createServer((req, res) => {
-	void handleHttpRequest(req, res);
-});
-
+const server = createServer((req, res) => void handleHttpRequest(req, res));
 const wss = new WebSocketServer({ server });
-const clients = new Map<WebSocket, ClientData>();
 
 async function fileExists(filePath: string): Promise<boolean> {
-	try {
-		const info = await stat(filePath);
-		return info.isFile();
-	} catch {
-		return false;
-	}
+  try {
+    const info = await stat(filePath);
+    return info.isFile();
+  } catch {
+    return false;
+  }
 }
 
 function getSafePath(root: string, route: string): string | null {
-	const cleaned = route.replace(/^\/+/, "");
-	const resolved = path.resolve(root, cleaned);
-	if (!resolved.startsWith(root)) {
-		return null;
-	}
-	return resolved;
+  const cleaned = route.replace(/^\/+/, "");
+  const resolved = path.resolve(root, cleaned);
+  if (!resolved.startsWith(root)) return null;
+  return resolved;
 }
 
 async function serveStaticFile(filePath: string, res: ServerResponse): Promise<boolean> {
-	if (!(await fileExists(filePath))) {
-		return false;
-	}
-
-	const ext = path.extname(filePath).toLowerCase();
-	const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
-	const body = await readFile(filePath);
-	res.writeHead(200, { "Content-Type": contentType });
-	res.end(body);
-	return true;
+  if (!(await fileExists(filePath))) return false;
+  const ext = path.extname(filePath).toLowerCase();
+  const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
+  const body = await readFile(filePath);
+  res.writeHead(200, { "Content-Type": contentType });
+  res.end(body);
+  return true;
 }
 
 async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-	const route = req.url?.split("?")[0] ?? "/";
+  // CORS for API (simple open CORS for dev)
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
 
-	if (route === "/health") {
-		res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-		res.end(JSON.stringify({ status: "ok" }));
-		return;
-	}
+  logger.info(`HTTP ${req.method} ${req.url}`);
 
-	if (route === "/" || route === "/index.html") {
-		try {
-			const frontendIndex = path.join(FRONTEND_DIST_ROOT, "index.html");
-			if (await serveStaticFile(frontendIndex, res)) {
-				return;
-			}
+  if (req.method === "POST" && req.url === "/api/logs") {
+    let body = "";
+    req.on("data", chunk => body += chunk.toString());
+    await new Promise(resolve => req.on("end", resolve));
+    try {
+      const logData = JSON.parse(body);
+      logger.frontendError(logData.message, { url: logData.url, userAgent: logData.userAgent });
+    } catch (e) {
+      // Ignore invalid JSON from frontend logs
+    }
+    res.writeHead(200);
+    res.end(JSON.stringify({ success: true }));
+    return;
+  }
 
-			res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-			res.end("No frontend found. Run npm run build:client.");
-			return;
-		} catch (error) {
-			console.error("Failed to serve HTML page:", error);
-			res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-			res.end("Failed to load chat page.");
-			return;
-		}
-	}
+  if (await handleAuthRoutes(req, res)) return;
 
-	const frontendFile = getSafePath(FRONTEND_DIST_ROOT, route);
-	if (frontendFile && (await serveStaticFile(frontendFile, res))) {
-		return;
-	}
+  const authHeader = req.headers.authorization;
+  let userId = "";
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const token = authHeader.substring(7);
+    const session = await prisma.session.findUnique({ where: { id: token } });
+    if (session && session.expiresAt > new Date()) {
+      userId = session.userId;
+    }
+  }
 
-	res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-	res.end("Not Found");
+  if (userId && await handleRoomRoutes(req, res, userId)) return;
+
+  const route = req.url?.split("?")[0] ?? "/";
+  if (route === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ status: "ok" }));
+    return;
+  }
+  if (route === "/" || route === "/index.html") {
+    try {
+      const frontendIndex = path.join(FRONTEND_DIST_ROOT, "index.html");
+      if (await serveStaticFile(frontendIndex, res)) return;
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("No frontend found. Run npm run build:client.");
+      return;
+    } catch (error) {
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Failed to load chat page.");
+      return;
+    }
+  }
+  const frontendFile = getSafePath(FRONTEND_DIST_ROOT, route);
+  if (frontendFile && (await serveStaticFile(frontendFile, res))) return;
+  res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("Not Found");
 }
 
-async function saveMessage(sender: string, content: string): Promise<void> {
-	await prisma.message.create({
-		data: {
-			sender,
-			content,
-		},
-	});
-}
+wss.on("connection", async (socket, req) => {
+  const url = new URL(req.url || "", `http://${req.headers.host}`);
+  const token = url.searchParams.get("token");
 
-function extractChatText(rawText: string): string {
-	let payload: ChatPayload | null = null;
-	try {
-		payload = JSON.parse(rawText) as ChatPayload;
-	} catch {
-		payload = null;
-	}
+  if (!token) {
+    socket.send(JSON.stringify({ type: "error", message: "Unauthorized: Missing token" }));
+    socket.close(1008, "Unauthorized");
+    return;
+  }
 
-	if (payload && payload.type === "chat" && payload.text.trim()) {
-		return payload.text.trim();
-	}
+  const session = await prisma.session.findUnique({
+    where: { id: token },
+    include: { user: true }
+  });
 
-	return rawText;
-}
+  if (!session || session.expiresAt < new Date()) {
+    socket.send(JSON.stringify({ type: "error", message: "Unauthorized: Invalid or expired token" }));
+    socket.close(1008, "Unauthorized");
+    return;
+  }
 
-function getGeminiPrompt(content: string): string | null {
-	const trimmed = content.trim();
-	if (/^@gemini\b/i.test(trimmed)) {
-		return trimmed.replace(/^@gemini\b\s*/i, "").trim() || null;
-	}
+  const userRooms = await prisma.roomMember.findMany({ where: { userId: session.user.id } });
+  const roomIds = new Set(userRooms.map(r => r.roomId));
+  
+  let generalRoom = await prisma.room.findFirst({ where: { name: "general" } });
+  if (!generalRoom) {
+    generalRoom = await prisma.room.create({ data: { name: "general", isPrivate: false } });
+  }
+  
+  if (!roomIds.has(generalRoom.id)) {
+    await prisma.roomMember.create({ data: { roomId: generalRoom.id, userId: session.user.id } });
+    roomIds.add(generalRoom.id);
+  }
 
-	if (/^@ai\b/i.test(trimmed)) {
-		return trimmed.replace(/^@ai\b\s*/i, "").trim() || null;
-	}
+  clients.set(socket, { userId: session.user.id, username: session.user.username, name: session.user.displayName, rooms: roomIds });
 
-	if (/^\/gemini\b/i.test(trimmed)) {
-		return trimmed.replace(/^\/gemini\b\s*/i, "").trim() || null;
-	}
+  socket.send(JSON.stringify({ type: "auth.success", name: session.user.displayName }));
+  socket.send(JSON.stringify({ type: "system.notice", content: "Connected to chat. Join a room or use /help" }));
+  
+  broadcastOnlineUsers();
 
-	if (/^\/ai\b/i.test(trimmed)) {
-		return trimmed.replace(/^\/ai\b\s*/i, "").trim() || null;
-	}
+  socket.on("message", (raw) => {
+    try {
+      const str = raw.toString().trim();
+      if (!str) return;
 
-	if (/^\/ask\b/i.test(trimmed)) {
-		return trimmed.replace(/^\/ask\b\s*/i, "").trim() || null;
-	}
+      const event = JSON.parse(str) as ClientEvent;
 
-	return null;
-}
+      switch (event.type) {
+        case "ping":
+          socket.send(JSON.stringify({ type: "pong" }));
+          break;
+        case "message.send":
+          handleMessage(socket, event.roomId, event.content, event.clientMessageId, event.replyToId, event.attachmentId);
+          break;
+        case "message.edit":
+          handleEditMessage(socket, event.messageId, event.content);
+          break;
+        case "message.delete":
+          handleDeleteMessage(socket, event.messageId);
+          break;
+        case "ai.ask":
+          import("./modules/ai").then(m => m.handleAIAsk(socket, event.roomId, event.prompt, event.isPrivate, event.attachmentId));
+          break;
+        case "room.join":
+          handleRoomJoin(socket, event.roomId);
+          break;
+        case "room.leave":
+          handleRoomLeave(socket, event.roomId);
+          break;
+        case "auth.rename":
+          handleAuth(socket, event.name);
+          break;
+        case "command.execute":
+          handleCommand(socket, event.command, event.args);
+          if (event.command === "who") {
+            broadcastOnlineUsers();
+          }
+          break;
+        case "attachment.image":
+          handleImageAttachment(socket, event.roomId, event.base64, event.mimeType);
+          break;
+        default:
+          socket.send(JSON.stringify({ type: "error", message: "Unknown event type" }));
+      }
+    } catch (err) {
+      console.error("Invalid WS message format", err);
+    }
+  });
 
-function findSocketByName(targetName: string): WebSocket | null {
-	const normalized = targetName.trim().toLowerCase();
-	if (!normalized) {
-		return null;
-	}
-
-	for (const [socket, data] of clients.entries()) {
-		if (socket.readyState !== WebSocket.OPEN) {
-			continue;
-		}
-		if (data.name.toLowerCase() === normalized) {
-			return socket;
-		}
-	}
-
-	return null;
-}
-
-function sendCommandHelp(socket: WebSocket): void {
-	socket.send("Commands:");
-	socket.send("/name yourName -> rename yourself");
-	socket.send("/who -> list online users");
-	socket.send("/dm user message -> private local message");
-	socket.send("@gemini, /gemini, @ai, /ai, /ask -> ask AI");
-	socket.send("/image analyze -> upload and analyze image with Gemini");
-}
-
-async function analyzeImageWithGemini(base64Image: string, mimeType: string, username: string): Promise<string> {
-	if (!GEMINI_API_KEY) {
-		return "Gemini is not configured yet. Set GEMINI_API_KEY in your .env file.";
-	}
-
-	try {
-		const response = await fetch(
-			`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-			{
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					contents: [
-						{
-							role: "user",
-							parts: [
-								{
-									text: "Analyze this image and provide: 1) Main objects/subjects identified, 2) People or characters (if any), 3) Text visible in image, 4) Colors and mood, 5) Overall identity/category (e.g., landscape, portrait, product, etc.). Be concise but thorough.",
-								},
-								{
-									inline_data: {
-										mime_type: mimeType,
-										data: base64Image,
-									},
-								},
-							],
-						},
-					],
-				}),
-			}
-		);
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			throw new Error(`Gemini API error ${response.status}: ${errorText}`);
-		}
-
-		const json = (await response.json()) as {
-			candidates?: Array<{
-				content?: {
-					parts?: Array<{ text?: string }>;
-				};
-			}>;
-		};
-
-		const reply = json.candidates?.[0]?.content?.parts
-			?.map((part) => part.text ?? "")
-			.join("")
-			.trim();
-
-		if (!reply) {
-			return "I could not analyze this image.";
-		}
-
-		return reply;
-	} catch (error: unknown) {
-		console.error("Image analysis failed:", error);
-		return `Image analysis failed: ${error instanceof Error ? error.message : "Unknown error"}`;
-	}
-}
-
-async function getGeminiReply(prompt: string, username: string): Promise<string> {
-	if (!GEMINI_API_KEY) {
-		return "Gemini is not configured yet. Set GEMINI_API_KEY in your .env file.";
-	}
-
-	const response = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`,
-		{
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				contents: [
-					{
-						role: "user",
-						parts: [
-							{
-								text: `You are '${GEMINI_NAME}' in a chat room. Keep responses short and friendly. User ${username} says: ${prompt}`,
-							},
-						],
-					},
-				],
-			}),
-		}
-	);
-
-	if (!response.ok) {
-		const errorText = await response.text();
-		throw new Error(`Gemini API error ${response.status}: ${errorText}`);
-	}
-
-	const json = (await response.json()) as {
-		candidates?: Array<{
-			content?: {
-				parts?: Array<{ text?: string }>;
-			};
-		}>;
-	};
-
-	const reply = json.candidates?.[0]?.content?.parts
-		?.map((part) => part.text ?? "")
-		.join("")
-		.trim();
-
-	if (!reply) {
-		return "I did not get a response from Gemini this time.";
-	}
-
-	return reply;
-}
-
-function broadcast(message: string, except?: WebSocket): void {
-	for (const client of wss.clients) {
-		if (client.readyState !== WebSocket.OPEN) {
-			continue;
-		}
-		if (client === except) {
-			continue;
-		}
-		client.send(message);
-	}
-}
-
-wss.on("connection", (socket) => {
-	const generatedName = `user-${Math.floor(Math.random() * 10000)}`;
-	clients.set(socket, { name: generatedName });
-
-	socket.send(`Connected to chat room as ${generatedName}`);
-	socket.send("Use command /name yourName to rename yourself.");
-	socket.send("Talk to AI with @gemini, /gemini, @ai, /ai, or /ask.");
-	socket.send("Use /help to see all commands.");
-	broadcast(`${generatedName} joined the room.`, socket);
-
-	socket.on("message", (raw) => {
-		const text = raw.toString().trim();
-		const current = clients.get(socket);
-		if (!current || !text) {
-			return;
-		}
-
-		// Handle image analysis
-		if (text.startsWith("IMAGE:")) {
-			const imageData = text.slice(6);
-			const matches = imageData.match(/^data:([^;]+);base64,(.+)$/);
-			if (!matches || matches.length < 3) {
-				socket.send("Invalid image data format.");
-				return;
-			}
-
-			const mimeType = matches[1];
-			const base64Data = matches[2];
-
-			socket.send(`${current.name}: Analyzing image...`);
-			broadcast(`${current.name}: Analyzing image...`, socket);
-
-			void analyzeImageWithGemini(base64Data, mimeType, current.name)
-				.then(async (analysis) => {
-					const analysisMessage = `[IMAGE ANALYSIS] ${analysis}`;
-					broadcast(`${current.name}: ${analysisMessage}`);
-					await saveMessage(current.name, analysisMessage);
-				})
-				.catch((error: unknown) => {
-					console.error("Image analysis failed:", error);
-					socket.send("Error analyzing image. Please try again.");
-				});
-			return;
-		}
-
-		if (text.startsWith("/name ")) {
-			const next = text.slice(6).trim();
-			if (!next) {
-				socket.send("Name cannot be empty.");
-				return;
-			}
-			const oldName = current.name;
-			current.name = next;
-			socket.send(`You are now known as ${next}`);
-			broadcast(`${oldName} is now known as ${next}`, socket);
-			return;
-		}
-
-		if (text === "/help") {
-			sendCommandHelp(socket);
-			return;
-		}
-
-		if (text === "/who") {
-			const onlineUsers = Array.from(clients.values())
-				.map((data) => data.name)
-				.sort((a, b) => a.localeCompare(b));
-			socket.send(`Online users (${onlineUsers.length}): ${onlineUsers.join(", ")}`);
-			return;
-		}
-
-		if (text.startsWith("/dm ")) {
-			const dmPayload = text.slice(4).trim();
-			const [targetName, ...rest] = dmPayload.split(/\s+/);
-			const dmMessage = rest.join(" ").trim();
-
-			if (!targetName || !dmMessage) {
-				socket.send("Usage: /dm userName your message");
-				return;
-			}
-
-			const targetSocket = findSocketByName(targetName);
-			if (!targetSocket) {
-				socket.send(`User '${targetName}' is not online.`);
-				return;
-			}
-
-			if (targetSocket === socket) {
-				socket.send("You cannot DM yourself.");
-				return;
-			}
-
-			targetSocket.send(`[DM from ${current.name}] ${dmMessage}`);
-			socket.send(`[DM to ${targetName}] ${dmMessage}`);
-			return;
-		}
-
-		const content = extractChatText(text);
-
-		void saveMessage(current.name, content).catch((error: unknown) => {
-			console.error("Failed to store message:", error);
-		});
-		broadcast(`${current.name}: ${content}`);
-
-		const geminiPrompt = getGeminiPrompt(content);
-		if (!geminiPrompt) {
-			return;
-		}
-
-		void getGeminiReply(geminiPrompt, current.name)
-			.then(async (reply) => {
-				broadcast(`${GEMINI_NAME}: ${reply}`);
-				await saveMessage(GEMINI_NAME, reply);
-			})
-			.catch((error: unknown) => {
-				console.error("Gemini response failed:", error);
-				socket.send("gemini: Sorry, I could not respond right now.");
-			});
-	});
-
-	socket.on("close", () => {
-		const data = clients.get(socket);
-		clients.delete(socket);
-		if (data) {
-			broadcast(`${data.name} left the room.`);
-		}
-	});
+  socket.on("close", () => {
+    const data = clients.get(socket);
+    clients.delete(socket);
+    if (data) {
+      for (const roomId of data.rooms) {
+        broadcast({ type: "system.notice", roomId, content: `${data.name} left.` }, undefined, roomId);
+      }
+      broadcastOnlineUsers();
+    }
+  });
 });
 
 server.listen(PORT, LISTEN_HOST, () => {
-	console.log(`\n${"═".repeat(70)}`);
-	console.log(`Chatroom Server Running`);
-	console.log(`${"═".repeat(70)}`);
-	console.log(`Web: ${WEB_URL}`);
-	console.log(`WebSocket: ${SERVER_URL}`);
-	console.log(`Local web: http://localhost:${PORT}`);
-	console.log(`Local ws: ws://localhost:${PORT}`);
-	console.log(`${"═".repeat(70)}\n`);
+  console.log(`\n${"═".repeat(70)}`);
+  console.log(`Chatroom Server Running`);
+  console.log(`${"═".repeat(70)}`);
+  console.log(`Web: ${WEB_URL}`);
+  console.log(`WebSocket: ${SERVER_URL}`);
+  console.log(`${"═".repeat(70)}\n`);
 });
 
 process.on("SIGINT", () => {
-	void prisma.$disconnect().finally(() => process.exit(0));
+  void prisma.$disconnect().finally(() => process.exit(0));
 });
-
 process.on("SIGTERM", () => {
-	void prisma.$disconnect().finally(() => process.exit(0));
+  void prisma.$disconnect().finally(() => process.exit(0));
 });

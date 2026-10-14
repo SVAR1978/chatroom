@@ -1,7 +1,45 @@
+# Dependencies
 node_modules/
+
+# Build outputs
 backend/dist/
 frontend/dist/
-.DS_Store
-.env
+*.tsbuildinfo
 
+# Environment variables — never commit these!
+.env
+.env.*
+!.env.example
+
+# Logs
 logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / OS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Vite cache
+.vite/
+frontend/.vite/
+
+# Uploaded files / local storage
+backend/uploads/
+*.sqlite
+*.db
+
+# Misc
+*.pem
+.cache/

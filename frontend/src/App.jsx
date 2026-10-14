@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import RoomList from "./components/RoomList";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import ConversationSidebar from "./components/ConversationSidebar";
 import MessageList from "./components/MessageList";
-import MessageInput from "./components/MessageInput";
-import AIChatPanel from "./components/AIChatPanel";
+import MessageComposer from "./components/MessageInput";
+import AIAssistantPanel from "./components/AIAssistantPanel";
 import Auth from "./components/Auth";
-import OnlineList from "./components/OnlineList";
+import OrbitalScene from "./components/OrbitalScene";
+import { Menu, Search, Users, X } from './components/icons';
 
 function getSocketUrl(token) {
   const env = import.meta.env.VITE_WS_URL;
@@ -43,6 +44,11 @@ export default function App() {
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [replyToMsg, setReplyToMsg] = useState(null);
   const [attachmentPreview, setAttachmentPreview] = useState(null);
+  
+  // UI State
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isContextOpen, setIsContextOpen] = useState(false);
+  
   const socketRef = useRef(null);
 
   const socketUrl = useMemo(() => token ? getSocketUrl(token) : null, [token]);
@@ -88,10 +94,10 @@ export default function App() {
           if (data.messages) {
             setHasMoreMessages(data.messages.length === 50);
             setMessages(data.messages.map(m => ({ 
-              id: m.id, clientMessageId: m.clientMessageId, text: `${m.senderName}: ${m.content}`, 
+              id: m.id, clientMessageId: m.clientMessageId, text: `${m.senderName}: ${m.content}`, sender: m.senderName, 
               type: "user", status: "saved", content: m.content, isDeleted: m.isDeleted, editedAt: m.editedAt, replyToId: m.replyToId,
               attachmentId: m.attachmentId, attachmentUrl: m.attachmentId ? `/api/rooms/${currentRoom}/attachments/${m.attachmentId}` : undefined,
-              attachmentType: m.attachment?.mimeType, isAi: m.isAi
+              attachmentType: m.attachment?.mimeType, isAi: m.isAi, createdAt: m.createdAt
             })));
           }
         });
@@ -108,10 +114,10 @@ export default function App() {
         if (data.messages) {
           setHasMoreMessages(data.messages.length === 50);
           const older = data.messages.map(m => ({ 
-            id: m.id, clientMessageId: m.clientMessageId, text: `${m.senderName}: ${m.content}`, 
+            id: m.id, clientMessageId: m.clientMessageId, text: `${m.senderName}: ${m.content}`, sender: m.senderName,
             type: "user", status: "saved", content: m.content, isDeleted: m.isDeleted, editedAt: m.editedAt, replyToId: m.replyToId,
             attachmentId: m.attachmentId, attachmentUrl: m.attachmentId ? `/api/rooms/${currentRoom}/attachments/${m.attachmentId}` : undefined,
-            attachmentType: m.attachment?.mimeType, isAi: m.isAi
+            attachmentType: m.attachment?.mimeType, isAi: m.isAi, createdAt: m.createdAt
           }));
           setMessages(prev => [...older, ...prev]);
         }
@@ -121,12 +127,14 @@ export default function App() {
   useEffect(() => {
     if (!socketUrl || !user) return;
     
+    let isMounted = true;
     const socket = new WebSocket(socketUrl);
     socketRef.current = socket;
     let pingInterval;
     let pongTimeout;
 
     socket.addEventListener("open", () => {
+      if (!isMounted) return;
       setStatus("connected");
       setReconnectCount(0);
       setMessages((prev) => {
@@ -135,13 +143,13 @@ export default function App() {
           fetch(`/api/rooms/${currentRoom}/messages?after=${lastId}`, { headers: { "Authorization": `Bearer ${token}` } })
             .then(res => res.json())
             .then(data => {
-              if (data.messages && data.messages.length > 0) {
+              if (data.messages && data.messages.length > 0 && isMounted) {
                 setMessages(curr => {
                   const newMsgs = data.messages.map(m => ({ 
-                    id: m.id, clientMessageId: m.clientMessageId, text: `${m.senderName}: ${m.content}`, 
+                    id: m.id, clientMessageId: m.clientMessageId, text: `${m.senderName}: ${m.content}`, sender: m.senderName,
                     type: "user", status: "saved", content: m.content, isDeleted: m.isDeleted, editedAt: m.editedAt, replyToId: m.replyToId,
                     attachmentId: m.attachmentId, attachmentUrl: m.attachmentId ? `/api/rooms/${currentRoom}/attachments/${m.attachmentId}` : undefined,
-                    attachmentType: m.attachment?.mimeType, isAi: m.isAi
+                    attachmentType: m.attachment?.mimeType, isAi: m.isAi, createdAt: m.createdAt
                   }));
                   const filtered = newMsgs.filter(nm => !curr.find(c => c.id === nm.id));
                   return [...curr, ...filtered];
@@ -149,7 +157,7 @@ export default function App() {
               }
             });
         }
-        return [...prev, { text: "Connected to server", type: "system" }];
+        return [...prev, { text: "Connected to TeamRoom Server", type: "system" }];
       });
       
       pingInterval = setInterval(() => {
@@ -164,6 +172,7 @@ export default function App() {
     });
 
     socket.addEventListener("close", (e) => {
+      if (!isMounted) return;
       setStatus("disconnected");
       clearInterval(pingInterval);
       clearTimeout(pongTimeout);
@@ -172,15 +181,18 @@ export default function App() {
         handleLogout();
       } else {
         const timeout = Math.min(1000 * Math.pow(2, reconnectCount), 30000);
-        setTimeout(() => setReconnectCount(rc => rc + 1), timeout);
+        setTimeout(() => {
+          if (isMounted) setReconnectCount(rc => rc + 1);
+        }, timeout);
       }
     });
 
     socket.addEventListener("error", () => {
-      setStatus("error");
+      if (isMounted) setStatus("error");
     });
 
     socket.addEventListener("message", (event) => {
+      if (!isMounted) return;
       try {
         const data = JSON.parse(event.data);
         if (data.type === "pong") {
@@ -197,10 +209,10 @@ export default function App() {
               }
               if (data.id && prev.find(m => m.id === data.id)) return prev;
               return [...prev, { 
-                id: data.id, clientMessageId: data.clientMessageId, text: `${data.sender}: ${data.content}`, 
+                id: data.id, clientMessageId: data.clientMessageId, text: `${data.sender}: ${data.content}`, sender: data.sender,
                 content: data.content, replyToId: data.replyToId, isDeleted: data.isDeleted, editedAt: data.editedAt, 
                 attachmentId: data.attachmentId, attachmentUrl: data.attachmentUrl, attachmentType: data.attachmentType,
-                isAi: data.isAi,
+                isAi: data.isAi, createdAt: data.createdAt,
                 type: "user", status: "saved" 
               }];
             });
@@ -215,7 +227,6 @@ export default function App() {
           setName(data.name);
         } else if (data.type === "online.users") {
           setOnlineUsers(data.users);
-          setMessages((prev) => [...prev, { text: `Online (${data.users.length}): ${data.users.map(u => u.name).join(", ")}`, type: "system" }]);
         } else if (data.type === "error") {
           setMessages((prev) => [...prev, { text: `Error: ${data.message}`, type: "error" }]);
         }
@@ -223,16 +234,19 @@ export default function App() {
         const text = String(event.data ?? "").trim();
         if (text) {
           const chatLine = text.includes(": ");
-          setMessages((prev) => [...prev, { text, type: chatLine ? "user" : "system", status: "saved" }]);
+          setMessages((prev) => [...prev, { text, type: chatLine ? "user" : "system", status: "saved", sender: chatLine ? text.split(": ")[0] : undefined }]);
         }
       }
     });
 
     return () => {
+      isMounted = false;
       clearInterval(pingInterval);
       clearTimeout(pongTimeout);
       socket.close();
-      socketRef.current = null;
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
     };
   }, [socketUrl, currentRoom, user, reconnectCount]);
 
@@ -366,8 +380,9 @@ export default function App() {
         payload.attachmentId = attachmentPreview.attachmentId;
       }
       setMessages(prev => [...prev, { 
-        clientMessageId: cid, text: `${name}: ${text}`, content: text, rawContent: text, type: "user", status: "pending", 
-        replyToId: replyToMsg?.id, attachmentId: attachmentPreview?.attachmentId, attachmentUrl: attachmentPreview?.url, attachmentType: attachmentPreview?.mimeType 
+        clientMessageId: cid, text: `${name}: ${text}`, sender: name, content: text, rawContent: text, type: "user", status: "pending", 
+        replyToId: replyToMsg?.id, attachmentId: attachmentPreview?.attachmentId, attachmentUrl: attachmentPreview?.url, attachmentType: attachmentPreview?.mimeType,
+        createdAt: new Date().toISOString()
       }]);
       socket.send(JSON.stringify(payload));
       setTimeout(() => {
@@ -437,111 +452,142 @@ export default function App() {
   function handleJoinRoom(newRoomId) {
     if (newRoomId === currentRoom) return;
     setCurrentRoom(newRoomId);
-    setMessages([]); 
+    setMessages([]);
+    setIsSidebarOpen(false); // Close sidebar on mobile
   }
 
-  if (loading) return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>Loading...</div>;
+  if (loading) return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Loading...</div>;
 
   if (!token || !user) {
     return <Auth onLogin={handleLogin} />;
   }
 
-  const connectionLabel = status === "connected" ? "Connected" : status === "connecting" ? "Connecting" : "Offline";
-  const chatCount = messages.filter((message) => message.type === "user").length;
   const canSend = status === "connected" && input.trim().length > 0;
   const currentRoomName = rooms.find(r => r.id === currentRoom)?.name || "Loading...";
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand-block">
-          <h1>Chatroom <span style={{fontSize: '0.8rem', opacity: 0.7}}>#{currentRoomName}</span></h1>
-        </div>
-        <div className="meta">
-          <p className="pill">Messages: {chatCount}</p>
-          <p className={`status ${status}`}>{connectionLabel}</p>
-          <button className="button ghost" onClick={handleLogout} style={{marginLeft: '1rem'}}>Logout</button>
-        </div>
-      </header>
-
-      <section className="layout">
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <RoomList rooms={rooms} currentRoom={currentRoom} unreadCounts={unreadCounts} onJoinRoom={handleJoinRoom} />
-          <OnlineList 
-            users={onlineUsers.filter(u => u.username !== user?.username)} 
-            onMessage={(username) => {
-              setInput(`/dm ${username} `);
-              document.querySelector('input[type="text"]')?.focus();
-            }}
-          />
-        </div>
-        
-        <AIChatPanel 
-          setInput={setInput} 
-          name={name} 
-          setName={setName} 
-          onRename={applyName}
-          onWho={() => { setInput("/who"); sendMessage({ preventDefault: () => {} }); }}
-          onHelp={() => { setInput("/help"); sendMessage({ preventDefault: () => {} }); }}
-          onAskAI={(prompt, isPrivate) => {
-            if (socketRef.current?.readyState === WebSocket.OPEN) {
-              socketRef.current.send(JSON.stringify({ 
-                type: "ai.ask", 
-                roomId: currentRoom, 
-                prompt, 
-                isPrivate,
-                attachmentId: attachmentPreview?.attachmentId
-              }));
-            } else {
-              alert("Not connected to server");
-            }
-          }}
+    <div className="app-layout">
+      <React.Suspense fallback={null}>
+        <OrbitalScene />
+      </React.Suspense>
+      
+      {/* Overlay for mobile menus */}
+      {(isSidebarOpen || isContextOpen) && (
+        <div 
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 15 }} 
+          onClick={() => { setIsSidebarOpen(false); setIsContextOpen(false); }}
         />
+      )}
 
-        <section className="panel chat">
-          <div className="chat-head">
-            <h2>Live Conversation</h2>
-            <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-              <input 
-                type="text" 
-                placeholder="Search messages..." 
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                style={{ padding: '0.25rem 0.5rem', borderRadius: '4px', border: '1px solid #333', background: 'rgba(0,0,0,0.5)', color: 'white' }}
-              />
+      <ConversationSidebar 
+        rooms={rooms}
+        currentRoom={currentRoom}
+        unreadCounts={unreadCounts}
+        onJoinRoom={handleJoinRoom}
+        onlineUsers={onlineUsers.filter(u => u.username !== user.username)}
+        onMessageUser={(username) => {
+          setInput(`/dm ${username} `);
+          document.querySelector('textarea.composer-input')?.focus();
+          setIsSidebarOpen(false);
+        }}
+        currentUser={user}
+        onLogout={handleLogout}
+        isOpen={isSidebarOpen}
+      />
+
+      <main className="main-content">
+        <header className="chat-header">
+          <div className="chat-title-info">
+            <button className="icon-btn mobile-nav-toggle" onClick={() => setIsSidebarOpen(true)}>
+              <Menu size={20} />
+            </button>
+            <div>
+              <h2>{rooms.find(r => r.id === currentRoom)?.isDirect ? currentRoomName : `# ${currentRoomName}`}</h2>
+              <div className="status-indicator">
+                <div className={`status-dot ${status}`} />
+                <span>{status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting...' : 'Disconnected'}</span>
+              </div>
             </div>
           </div>
 
-          <MessageList 
-            messages={messages} 
-            onRetry={handleRetry} 
-            onLoadOlder={loadOlderMessages} 
-            hasMore={hasMoreMessages}
-            currentUser={user}
-            onReply={msg => setReplyToMsg(msg)}
-            onEdit={(id, content) => socketRef.current?.send(JSON.stringify({ type: "message.edit", messageId: id, content }))}
-            onDelete={id => socketRef.current?.send(JSON.stringify({ type: "message.delete", messageId: id }))}
-          />
-          
-          {replyToMsg && (
-            <div style={{ background: '#333', padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>Replying to message #{replyToMsg.id}...</span>
-              <button onClick={() => setReplyToMsg(null)} style={{ background: 'none', border: 'none', color: '#ff6b6b', cursor: 'pointer' }}>Cancel</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ position: 'relative', display: 'none' /* Enable when supported globally */ }} className="search-wrap">
+              <Search size={16} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input 
+                type="text" 
+                placeholder="Search..." 
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="input-field"
+                style={{ paddingLeft: '32px', width: '200px' }}
+              />
             </div>
-          )}
+            
+            <button className="icon-btn mobile-context-toggle" onClick={() => setIsContextOpen(true)}>
+              <Users size={20} />
+            </button>
+          </div>
+        </header>
 
-          <MessageInput 
-            input={input} 
-            setInput={setInput} 
-            onSendMessage={sendMessage} 
-            canSend={canSend} 
-            status={status} 
-            onFileSelect={handleFileSelect}
-            attachmentPreview={attachmentPreview}
-            onClearAttachment={() => setAttachmentPreview(null)}
-          />
-        </section>
-      </section>
-    </main>
+        <MessageList 
+          messages={messages} 
+          onRetry={handleRetry} 
+          onLoadOlder={loadOlderMessages} 
+          hasMore={hasMoreMessages}
+          currentUser={user}
+          onReply={msg => setReplyToMsg(msg)}
+          onEdit={(id, content) => socketRef.current?.send(JSON.stringify({ type: "message.edit", messageId: id, content }))}
+          onDelete={id => socketRef.current?.send(JSON.stringify({ type: "message.delete", messageId: id }))}
+        />
+
+        {replyToMsg && (
+          <div style={{ background: 'var(--surface-solid)', padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--border-glass)' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              Replying to <strong>{replyToMsg.sender || 'Unknown'}</strong>: 
+              <span style={{ opacity: 0.7, marginLeft: '8px' }}>{replyToMsg.content ? replyToMsg.content.substring(0, 50) + '...' : 'Message'}</span>
+            </span>
+            <button onClick={() => setReplyToMsg(null)} className="icon-btn" style={{ color: 'var(--danger)' }}>
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        <MessageComposer 
+          input={input} 
+          setInput={setInput} 
+          onSendMessage={sendMessage} 
+          canSend={canSend} 
+          status={status} 
+          onFileSelect={handleFileSelect}
+          attachmentPreview={attachmentPreview}
+          onClearAttachment={() => setAttachmentPreview(null)}
+        />
+      </main>
+
+      <AIAssistantPanel 
+        setInput={setInput} 
+        name={name} 
+        setName={setName} 
+        onRename={applyName}
+        onWho={() => { setInput("/who"); sendMessage({ preventDefault: () => {} }); }}
+        onHelp={() => { setInput("/help"); sendMessage({ preventDefault: () => {} }); }}
+        onAskAI={(prompt, isPrivate) => {
+          if (socketRef.current?.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({ 
+              type: "ai.ask", 
+              roomId: currentRoom, 
+              prompt, 
+              isPrivate,
+              attachmentId: attachmentPreview?.attachmentId
+            }));
+            setIsContextOpen(false); // Close on mobile
+          } else {
+            alert("Not connected to server");
+          }
+        }}
+        isOpen={isContextOpen}
+        onClose={() => setIsContextOpen(false)}
+      />
+    </div>
   );
 }

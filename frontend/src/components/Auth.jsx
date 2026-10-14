@@ -1,4 +1,6 @@
-import { useState } from "react";
+import React, { useState } from "react";
+import OrbitalScene from "./OrbitalScene";
+import { Sparkles, ArrowRight } from "./icons";
 
 export default function Auth({ onLogin }) {
   const [isLogin, setIsLogin] = useState(true);
@@ -32,49 +34,64 @@ export default function Auth({ onLogin }) {
   }
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-      <form onSubmit={handleSubmit} style={{ background: '#1e1e1e', padding: '2rem', borderRadius: '8px', width: '300px' }}>
-        <h2>{isLogin ? "Login" : "Register"}</h2>
-        {error && <p style={{ color: 'red' }}>{error}</p>}
-        
-        <div style={{ marginBottom: '1rem' }}>
-          <label>Username</label>
-          <input 
-            type="text" 
-            value={username} 
-            onChange={e => setUsername(e.target.value)} 
-            className="field" 
-            required 
-            style={{ width: '100%', marginTop: '0.5rem' }} 
-          />
-        </div>
-        
-        <div style={{ marginBottom: '1rem' }}>
-          <label>Password</label>
-          <input 
-            type="password" 
-            value={password} 
-            onChange={e => setPassword(e.target.value)} 
-            className="field" 
-            required 
-            style={{ width: '100%', marginTop: '0.5rem' }} 
-          />
-        </div>
+    <>
+      <React.Suspense fallback={null}>
+        <OrbitalScene />
+      </React.Suspense>
+      <div className="auth-overlay">
+        <div className="auth-card glass-panel">
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '32px' }}>
+            <Sparkles size={48} color="var(--accent-cyan)" style={{ marginBottom: '16px' }} />
+            <h1 className="auth-title" style={{ margin: 0 }}>TeamRoom</h1>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '8px' }}>
+              {isLogin ? "Welcome back to the workspace" : "Create your workspace account"}
+            </p>
+          </div>
+          
+          <form onSubmit={handleSubmit} className="auth-form">
+            {error && (
+              <div style={{ padding: '12px', background: 'var(--danger-glass)', color: 'var(--danger)', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', border: '1px solid rgba(251, 113, 133, 0.3)' }}>
+                {error}
+              </div>
+            )}
+            
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Username</label>
+              <input 
+                type="text" 
+                value={username} 
+                onChange={e => setUsername(e.target.value)} 
+                className="input-field" 
+                required 
+                autoFocus
+              />
+            </div>
+            
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '8px' }}>Password</label>
+              <input 
+                type="password" 
+                value={password} 
+                onChange={e => setPassword(e.target.value)} 
+                className="input-field" 
+                required 
+              />
+            </div>
 
-        <button type="submit" className="button mint" disabled={loading} style={{ width: '100%' }}>
-          {loading ? "..." : (isLogin ? "Login" : "Register")}
-        </button>
+            <button type="submit" className="btn-primary" disabled={loading} style={{ marginTop: '8px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}>
+              {loading ? "..." : (isLogin ? "Login to Workspace" : "Create Account")}
+              {!loading && <ArrowRight size={16} />}
+            </button>
 
-        <p style={{ marginTop: '1rem', textAlign: 'center' }}>
-          {isLogin ? "Don't have an account? " : "Already have an account? "}
-          <span 
-            style={{ color: '#00d2ff', cursor: 'pointer' }} 
-            onClick={() => setIsLogin(!isLogin)}
-          >
-            {isLogin ? "Register" : "Login"}
-          </span>
-        </p>
-      </form>
-    </div>
+            <div 
+              className="toggle-link"
+              onClick={() => setIsLogin(!isLogin)}
+            >
+              {isLogin ? "Need an account? Register" : "Already have an account? Login"}
+            </div>
+          </form>
+        </div>
+      </div>
+    </>
   );
 }

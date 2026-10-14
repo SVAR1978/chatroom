@@ -1,5 +1,6 @@
 import { WebSocket } from "ws";
 import { clients, broadcast, sendToClient } from "../state";
+// @ts-check (force IDE refresh)
 import { prisma } from "../db";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
@@ -104,7 +105,10 @@ export async function handleAIAsk(socket: WebSocket | null, roomId: string, prom
         }
       );
       clearTimeout(timeoutId);
-      if (!response.ok) throw new Error("API error: " + response.statusText);
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`API error: ${response.status} ${response.statusText} - ${errText}`);
+      }
       const json = await response.json() as any;
       text = json.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("").trim();
     } catch (e: any) {
